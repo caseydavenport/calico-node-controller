@@ -1,0 +1,24 @@
+package: github.com/projectcalico/node-controller
+import:
+- package: github.com/golang/glog
+- package: github.com/projectcalico/libcalico-go
+  version: ^1.4.5
+  subpackages:
+  - lib/api
+- package: k8s.io/apimachinery
+  version: b317fa7ec8e0e7d1f77ac63bf8c3ec7b29a2a215
+  subpackages:
+  - pkg/fields
+  - pkg/runtime/schema
+- package: k8s.io/client-go
+  version: 4a3ab2f5be5177366f8206fd79ce55ca80e417fa
+  subpackages:
+  - kubernetes
+  - tools/cache
+  - tools/clientcmd
+  - util/workqueue
+- package: github.com/emicklei/go-restful
+  version: 09691a3b6378b740595c1002f40c34dd5f218a22
+- package: github.com/coreos/etcd
+  version: 17ae440991da3bdb2df4309936dd2074f66ec394
+
