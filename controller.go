@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	calicache "github.com/projectcalico/node-controller/pkg/cache"
+
 	"github.com/projectcalico/libcalico-go/lib/api"
 	"github.com/projectcalico/libcalico-go/lib/client"
 
@@ -81,13 +83,13 @@ func main() {
 		AddFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
 			if err == nil {
-				queue.Add(key)
+				queue.Add(QueueUpdate{key, false})
 			}
 		},
 		UpdateFunc: func(old interface{}, new interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(new)
 			if err == nil {
-				queue.Add(key)
+				queue.Add(QueueUpdate{key, false})
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
@@ -95,7 +97,7 @@ func main() {
 			// key function.
 			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 			if err == nil {
-				queue.Add(key)
+				queue.Add(QueueUpdate{key, false})
 			}
 		},
 	}, cache.Indexers{})
@@ -116,8 +118,13 @@ type Controller struct {
 	indexer        cache.Indexer
 	queue          workqueue.RateLimitingInterface
 	informer       cache.Controller
-	calicoObjCache map[string]interface{}
+	calicoObjCache calicache.ResourceCache
 	calicoClient   *client.Client
+}
+
+type QueueUpdate struct {
+	Key   string
+	Force bool
 }
 
 func (c *Controller) Run(threadiness int, stopCh chan struct{}) {
@@ -136,7 +143,8 @@ func (c *Controller) Run(threadiness int, stopCh chan struct{}) {
 	}
 
 	// Send any required deletes.
-	c.sendDeletes()
+	c.populateCalicoCache()
+	go c.periodicDatastoreSync()
 
 	// TODO: For now, threadiness MUST be 1 since we don't lock the secondary
 	// Calico object cache.  Once we add locking to that cache, we can start multiple
@@ -154,7 +162,55 @@ func (c *Controller) runWorker() {
 	}
 }
 
-func (c *Controller) sendDeletes() {
+func (c *Controller) periodicDatastoreSync() {
+	fmt.Println("Starting periodic resync thread")
+	for {
+		fmt.Println("Performing a periodic resync")
+		c.performDatastoreSync()
+		fmt.Println("Periodic resync done")
+		time.Sleep(20 * time.Second)
+	}
+}
+
+func (c *Controller) performDatastoreSync() {
+	// First, let's bring the Calico cache in-sync with what's actually in etcd.
+	calicoNodes, err := c.calicoClient.Nodes().List(api.NodeMetadata{})
+	if err != nil {
+		panic(err)
+	}
+
+	// Build a map of existing nodes, plus a map including all keys that exist.
+	allKeys := map[string]bool{}
+	existing := map[string]interface{}{}
+	for _, no := range calicoNodes.Items {
+		k := no.Metadata.Name
+		existing[k] = no
+		allKeys[k] = true
+	}
+
+	// Sync the in-memory cache with etcd.  We don't care about entries that exist in
+	// etcd but not in our cache - we'll update those anyway.
+	for _, k := range c.calicoObjCache.ListKeys() {
+		if _, ok := existing[k]; !ok {
+			// No longer in etcd - delete it from cache.
+			c.calicoObjCache.Delete(k)
+		} else {
+			// Update cache with data from etcd.
+		}
+	}
+
+	// Now, send through all existing keys from the Kubernetes API so we can
+	// sync them, if needed.
+	for _, k := range c.indexer.ListKeys() {
+		allKeys[k] = true
+	}
+	fmt.Printf("Refreshing %d keys in total", len(allKeys))
+	for k, _ := range allKeys {
+		c.queue.Add(QueueUpdate{k, false})
+	}
+}
+
+func (c *Controller) populateCalicoCache() {
 	// Populate the Calico cache.
 	calicoNodes, err := c.calicoClient.Nodes().List(api.NodeMetadata{})
 	if err != nil {
@@ -162,75 +218,60 @@ func (c *Controller) sendDeletes() {
 	}
 	for _, no := range calicoNodes.Items {
 		k := no.Metadata.Name
-		c.calicoObjCache[k] = no
-	}
-
-	// Get the current kubernetes cache.
-	existingKeys := c.indexer.ListKeys()
-	keyLookup := map[string]bool{}
-	for _, k := range existingKeys {
-		keyLookup[k] = true
-	}
-
-	// Loop through Calico objects and check for deletes.
-	for k, no := range c.calicoObjCache {
-		if _, exists := keyLookup[k]; !exists {
-			// Delete in Calico.
-			fmt.Println("Deleting stale Calico node!")
-			c.calicoClient.Nodes().Delete(no.(api.Node).Metadata)
-		}
+		c.calicoObjCache.Set(k, no)
 	}
 }
 
 func (c *Controller) processNextItem() bool {
 	// Wait until there is a new item in the working queue
-	key, quit := c.queue.Get()
+	upd, quit := c.queue.Get()
 	if quit {
 		return false
 	}
 	// Tell the queue that we are done with processing this key. This unblocks the key for other workers
 	// This allows safe parallel processing because two nodes with the same key are never processed in
 	// parallel.
-	defer c.queue.Done(key)
+	defer c.queue.Done(upd)
 
 	// Invoke the method containing the business logic
-	err := c.syncToCalico(key.(string))
+	err := c.syncToCalico(upd.(QueueUpdate))
 
 	// Handle the error if something went wrong during the execution of the business logic
-	c.handleErr(err, key)
+	c.handleErr(err, upd)
 	return true
 }
 
 // handleErr checks if an error happened and makes sure we will retry later.
-func (c *Controller) handleErr(err error, key interface{}) {
+func (c *Controller) handleErr(err error, upd interface{}) {
 	if err == nil {
 		// Forget about the #AddRateLimited history of the key on every successful synchronization.
 		// This ensures that future processing of updates for this key is not delayed because of
 		// an outdated error history.
-		c.queue.Forget(key)
+		c.queue.Forget(upd)
 		return
 	}
 
 	// This controller retries 5 times if something goes wrong. After that, it stops trying.
-	if c.queue.NumRequeues(key) < 5 {
-		glog.Infof("Error syncing node %v: %v", key, err)
+	if c.queue.NumRequeues(upd) < 5 {
+		glog.Infof("Error syncing node %v: %v", upd, err)
 
 		// Re-enqueue the key rate limited. Based on the rate limiter on the
 		// queue and the re-enqueue history, the key will be processed later again.
-		c.queue.AddRateLimited(key)
+		c.queue.AddRateLimited(upd)
 		return
 	}
 
-	c.queue.Forget(key)
+	c.queue.Forget(upd)
 	// Report to an external entity that, even after several retries, we could not successfully process this key
 	uruntime.HandleError(err)
-	glog.Infof("Dropping node %q out of the queue: %v", key, err)
+	glog.Infof("Dropping node %q out of the queue: %v", upd, err)
 }
 
 // syncToCalico is the business logic of the controller. In this controller it simply prints
 // information about the node to stdout. In case an error happened, it has to simply return the error.
 // The retry logic should not be part of the business logic.
-func (c *Controller) syncToCalico(key string) error {
+func (c *Controller) syncToCalico(upd QueueUpdate) error {
+	key := upd.Key
 	obj, exists, err := c.indexer.GetByKey(key)
 	if err != nil {
 		glog.Errorf("Fetching object with key %s from store failed with %v", key, err)
@@ -241,13 +282,16 @@ func (c *Controller) syncToCalico(key string) error {
 		fmt.Printf("Node %s does not exist anymore\n", key)
 
 		// Check if it exists in our cache.
-		no, ok := c.calicoObjCache[key]
-		if !ok {
+		no, ok := c.calicoObjCache.Get(key)
+		if ok || upd.Force {
 			// If it does, then remove it.
 			fmt.Printf("Deleting node %s\n", key)
-			delete(c.calicoObjCache, key)
+			c.calicoObjCache.Delete(key)
+			return c.calicoClient.Nodes().Delete(no.(api.Node).Metadata)
 		}
-		return c.calicoClient.Nodes().Delete(no.(api.Node).Metadata)
+		// Otherwise, this is a no-op.
+		fmt.Printf("No-op delete\n")
+		return nil
 	} else {
 		// Generate the Calico representation of this Node.
 		no := api.Node{Metadata: api.NodeMetadata{Name: obj.(*v1.Node).Name}}
@@ -255,14 +299,16 @@ func (c *Controller) syncToCalico(key string) error {
 		// Only apply an update if it's:
 		// - Not in the cache
 		// - Different from what's in the cache.
-		if _, exists := c.calicoObjCache[key]; !exists {
+		// - This is a forced udpate.
+		if _, exists := c.calicoObjCache.Get(key); !exists || upd.Force {
 			fmt.Printf("Sync/Add/Update for Node %s\n", obj.(*v1.Node).Name)
 			_, err := c.calicoClient.Nodes().Apply(&no)
 			if err != nil {
 				return err
 			}
-			c.calicoObjCache[key] = no
+			c.calicoObjCache.Set(key, no)
 		}
+		fmt.Printf("No-op update for %s\n", obj.(*v1.Node).Name)
 	}
 	return nil
 }
@@ -281,7 +327,7 @@ func NewController(queue workqueue.RateLimitingInterface, indexer cache.Indexer,
 		informer:       informer,
 		indexer:        indexer,
 		queue:          queue,
-		calicoObjCache: map[string]interface{}{},
+		calicoObjCache: calicache.NewCache(),
 		calicoClient:   cclient,
 	}
 }
