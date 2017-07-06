@@ -12,42 +12,17 @@ import (
 
 	"github.com/golang/glog"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/fields"
 	uruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	// "k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-	// kapi "k8s.io/client-go/pkg/api"
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/workqueue"
 )
-
-// CalicoNode runtime.Object representation.
-type CalicoNode struct {
-	api.Node
-}
-
-func (c CalicoNode) GetObjectKind() schema.ObjectKind {
-	return CalicoNodeObjectKind{}
-}
-
-type CalicoNodeObjectKind struct {
-}
-
-func (c CalicoNodeObjectKind) SetGroupVersionKind(kind schema.GroupVersionKind) {}
-func (c CalicoNodeObjectKind) GroupVersionKind() schema.GroupVersionKind {
-	return schema.GroupVersionKind{
-		Group:   "",
-		Version: "v1",
-		Kind:    "Node",
-	}
-}
 
 func main() {
 	var kubeconfig string
@@ -108,7 +83,7 @@ func main() {
 	fmt.Println("Starting controller")
 	stop := make(chan struct{})
 	defer close(stop)
-	go controller.Run(1, stop)
+	go controller.Run(5, stop)
 
 	// Wait forever.
 	select {}
@@ -142,13 +117,13 @@ func (c *Controller) Run(threadiness int, stopCh chan struct{}) {
 		return
 	}
 
-	// Send any required deletes.
+	// Populate the Calico cache, and kick off a periodic resync which will
+	// keep the Calico cache up to date with any changes in etcd.  This is basically
+	// a workaround for lack of Watch support in libcalico-go.
 	c.populateCalicoCache()
 	go c.periodicDatastoreSync()
 
-	// TODO: For now, threadiness MUST be 1 since we don't lock the secondary
-	// Calico object cache.  Once we add locking to that cache, we can start multiple
-	// worker routines.
+	// Start a number of worker threads to read from the queue.
 	for i := 0; i < threadiness; i++ {
 		go wait.Until(c.runWorker, time.Second, stopCh)
 	}
@@ -199,8 +174,8 @@ func (c *Controller) performDatastoreSync() {
 		}
 	}
 
-	// Now, send through all existing keys from the Kubernetes API so we can
-	// sync them, if needed.
+	// Now, send through all existing keys across both the Kubernetes API, and
+	// etcd so we can sync them if needed.
 	for _, k := range c.indexer.ListKeys() {
 		allKeys[k] = true
 	}
@@ -267,9 +242,8 @@ func (c *Controller) handleErr(err error, upd interface{}) {
 	glog.Infof("Dropping node %q out of the queue: %v", upd, err)
 }
 
-// syncToCalico is the business logic of the controller. In this controller it simply prints
-// information about the node to stdout. In case an error happened, it has to simply return the error.
-// The retry logic should not be part of the business logic.
+// syncToCalico syncs the given update to Calico's etcd, as well as the in-memory cache
+// of Calico objects.
 func (c *Controller) syncToCalico(upd QueueUpdate) error {
 	key := upd.Key
 	obj, exists, err := c.indexer.GetByKey(key)
