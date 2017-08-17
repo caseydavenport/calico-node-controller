@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	calicache "github.com/projectcalico/node-controller/pkg/cache"
+	calicache "github.com/caseydavenport/calico-node-controller/pkg/cache"
 
 	"github.com/projectcalico/libcalico-go/lib/api"
 	"github.com/projectcalico/libcalico-go/lib/client"

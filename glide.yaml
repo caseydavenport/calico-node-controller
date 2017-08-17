@@ -1,4 +1,4 @@
-package: github.com/projectcalico/node-controller
+package: github.com/caseydavenport/calico-node-controller
 import:
 - package: github.com/golang/glog
 - package: github.com/projectcalico/libcalico-go
