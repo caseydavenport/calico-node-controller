@@ -1,0 +1,11 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: calico-node-controller
+  namespace: kube-system
+data:
+  # Configure this with the location of your etcd cluster.
+  etcd_endpoints: "https://etcd:2379"
+  etcd_ca: "/etc/kubernetes/ssl/etcd/client-ca.pem"
+  etcd_cert: "/etc/kubernetes/ssl/etcd/client-crt.pem"
+  etcd_key: "/etc/kubernetes/ssl/etcd/client-key.pem"
