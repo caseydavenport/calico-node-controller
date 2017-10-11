@@ -5,6 +5,6 @@ metadata:
   namespace: kube-system
 data:
   etcd_endpoints: {{ .Values.Installation.V1.Infra.CalicoNodeController.EtcdEndpoint }}
-  etcd_ca: {{ .Values.Installation.V1.Infra.CalicoNodeController.EtcdCaCert }}
-  etcd_cert: {{ .Values.Installation.V1.Infra.CalicoNodeController.EtcdCert }}
+  etcd_ca: {{ .Values.Installation.V1.Infra.CalicoNodeController.EtcdCa }}
+  etcd_cert: {{ .Values.Installation.V1.Infra.CalicoNodeController.EtcdCrt }}
   etcd_key: {{ .Values.Installation.V1.Infra.CalicoNodeController.EtcdKey }}
