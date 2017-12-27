@@ -1,0 +1,25 @@
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: calico-node-controller
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - list
+      - watch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: calico-node-controller
+subjects:
+  - kind: ServiceAccount
+    name: calico-node-controller
+roleRef:
+  kind: ClusterRole
+  name: calico-node-controller
+  apiGroup: rbac.authorization.k8s.io

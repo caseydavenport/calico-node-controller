@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"runtime"
 	"time"
 
-	calicache "github.com/projectcalico/node-controller/pkg/cache"
+	calicache "github.com/giantswarm/calico-node-controller/pkg/cache"
 
 	"github.com/projectcalico/libcalico-go/lib/api"
 	"github.com/projectcalico/libcalico-go/lib/client"
@@ -24,13 +26,40 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
+// Common variables.
+var (
+	description string = "Calico node controller for Kubernetes."
+	gitCommit   string = "n/a"
+	name        string = "calico-node-controller"
+	source      string = "https://github.com/giantswarm/calico-node-controller"
+)
+
 func main() {
+	// Print version.
+	if (len(os.Args) > 1) && (os.Args[1] == "version") {
+		fmt.Printf("Description:    %s\n", description)
+		fmt.Printf("Git Commit:     %s\n", gitCommit)
+		fmt.Printf("Go Version:     %s\n", runtime.Version())
+		fmt.Printf("Name:           %s\n", name)
+		fmt.Printf("OS / Arch:      %s / %s\n", runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("Source:         %s\n", source)
+		return
+	}
+
 	var kubeconfig string
 	var master string
+	var help bool
 
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "absolute path to the kubeconfig file")
 	flag.StringVar(&master, "master", "", "master url")
+	flag.BoolVar(&help, "help", false, "Print usage and exit")
 	flag.Parse()
+
+	// Print usage.
+	if help {
+		flag.Usage()
+		return
+	}
 
 	// creates the connection
 	config, err := clientcmd.BuildConfigFromFlags(master, kubeconfig)

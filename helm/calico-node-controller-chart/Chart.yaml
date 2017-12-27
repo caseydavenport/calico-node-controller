@@ -1,0 +1,2 @@
+name: calico-node-controller-chart
+version: 1.0.0-[[ .SHA ]]
