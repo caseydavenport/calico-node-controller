@@ -1,5 +1,7 @@
 # Calico Node Controller for Kubernetes
 
+### NOTE: A productized version of this functionality now exists here: https://github.com/projectcalico/kube-controllers/tree/master/pkg/controllers/node 
+
 This is a prototype, WIP node controller for Kubernetes.  I'm not currently intending to continue
 development / maintenance much further, but it might be a useful starting point for someone.
 
